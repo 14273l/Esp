@@ -1,0 +1,419 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local TextService = game:GetService("TextService")
+
+local LocalPlayer = Players.LocalPlayer
+assert(LocalPlayer, "Run this script in a Roblox game client.")
+
+local Settings = {
+	Enabled = true,
+	TeamCheck = false,
+	MaxDistance = 500, -- Meters; 0 means unlimited.
+	StudsToMeters = 0.28,
+	ToggleKey = Enum.KeyCode.RightAlt,
+	BoxColor = Color3.fromRGB(255, 255, 255),
+	TextColor = Color3.fromRGB(255, 255, 255),
+	HealthLow = Color3.fromRGB(255, 5, 0),
+	HealthHigh = Color3.fromRGB(0, 255, 2),
+}
+
+local function loadProggyClean()
+	assert(type(writefile) == "function", "Your executor does not support writefile.")
+	assert(type(isfile) == "function", "Your executor does not support isfile.")
+	assert(type(getcustomasset) == "function", "Your executor does not support custom fonts.")
+
+	local fontPath = "G2L_PlayerESP_ProggyClean.ttf"
+	local familyPath = "G2L_PlayerESP_ProggyClean.font.json"
+
+	if not isfile(fontPath) then
+		-- ProggyClean, bundled with Dear ImGui (MIT-licensed).
+		local success, data = pcall(function()
+			return game:HttpGet(
+				"https://raw.githubusercontent.com/ocornut/imgui/master/misc/fonts/ProggyClean.ttf"
+			)
+		end)
+
+		assert(success, "ProggyClean download failed: " .. tostring(data))
+		assert(type(data) == "string" and data:sub(1, 4) == "\0\1\0\0", "Invalid ProggyClean font download.")
+		writefile(fontPath, data)
+	end
+
+	local familyJSON = HttpService:JSONEncode({
+		name = "ProggyClean",
+		faces = {
+			{
+				name = "Regular",
+				weight = 400,
+				style = "normal",
+				assetId = getcustomasset(fontPath),
+			},
+		},
+	})
+
+	writefile(familyPath, familyJSON)
+	local familyAsset = getcustomasset(familyPath)
+	local success, info = pcall(function()
+		return TextService:GetFamilyInfoAsync(familyAsset)
+	end)
+
+	assert(success, "ProggyClean could not be registered: " .. tostring(info))
+	assert(info.Name == "ProggyClean", "The registered font is not ProggyClean.")
+	return Font.new(familyAsset, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+end
+
+local proggyClean = loadProggyClean()
+local GUI_NAME = "G2L_PlayerESP"
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+local guiParent = playerGui
+
+if type(gethui) == "function" then
+	local success, container = pcall(gethui)
+	if success and typeof(container) == "Instance" then
+		guiParent = container
+	end
+end
+
+local previous = guiParent:FindFirstChild(GUI_NAME)
+if previous then
+	previous:Destroy()
+end
+
+if guiParent ~= playerGui then
+	local previousPlayerGui = playerGui:FindFirstChild(GUI_NAME)
+	if previousPlayerGui then
+		previousPlayerGui:Destroy()
+	end
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = GUI_NAME
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.DisplayOrder = 100
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui:SetAttribute("FontName", "ProggyClean")
+screenGui.Parent = guiParent
+
+local entries = {}
+local connections = {}
+local cleanedUp = false
+
+local function create(className, properties, parent)
+	local instance = Instance.new(className)
+	for property, value in pairs(properties) do
+		instance[property] = value
+	end
+	instance.Parent = parent
+	return instance
+end
+
+local function addStroke(parent, color, offset)
+	return create("UIStroke", {
+		Color = color,
+		Thickness = 1,
+		BorderOffset = UDim.new(0, offset or 0),
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		LineJoinMode = Enum.LineJoinMode.Miter,
+	}, parent)
+end
+
+local function addLabel(parent, name, order)
+	return create("TextLabel", {
+		Name = name,
+		LayoutOrder = order or 0,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 0, 20),
+		FontFace = proggyClean,
+		Text = "",
+		TextSize = 12,
+		TextColor3 = Settings.TextColor,
+		TextStrokeColor3 = Color3.new(0, 0, 0),
+		TextStrokeTransparency = 0,
+		TextWrapped = false,
+	}, parent)
+end
+
+local function addPlayer(player)
+	if player == LocalPlayer or entries[player] then
+		return
+	end
+
+	local box = create("Frame", {
+		Name = "Box_Frame_" .. player.UserId,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = false,
+		Size = UDim2.fromOffset(235, 365),
+	}, screenGui)
+
+	addStroke(box, Color3.new(0, 0, 0), 0)
+	addStroke(box, Settings.BoxColor, 1)
+	addStroke(box, Color3.new(0, 0, 0), 2)
+
+	local healthBar = create("Frame", {
+		Name = "HealthBar_Frame",
+		BorderSizePixel = 0,
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		Position = UDim2.fromOffset(-8, -1),
+		Size = UDim2.new(0, 2, 1, 2),
+	}, box)
+
+	addStroke(healthBar, Color3.new(0, 0, 0), 0)
+
+	local healthFill = create("Frame", {
+		Name = "HealthFill",
+		BorderSizePixel = 0,
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.fromScale(0, 1),
+		Size = UDim2.fromScale(1, 1),
+	}, healthBar)
+
+	local healthGradient = create("UIGradient", {
+		Rotation = -90,
+		Color = ColorSequence.new(Settings.HealthLow, Settings.HealthHigh),
+	}, healthFill)
+
+	local nameFrame = create("Frame", {
+		Name = "Name_Frame",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.fromOffset(-2, -23),
+		Size = UDim2.new(1, 4, 0, 20),
+	}, box)
+
+	local nameLabel = addLabel(nameFrame, "Name(display)_Label")
+	nameLabel.Text = string.format("%s(@%s)", player.DisplayName, player.Name)
+
+	local bottomFrame = create("Frame", {
+		Name = "BottomText_Frame",
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Position = UDim2.new(0, -2, 1, 3),
+		Size = UDim2.new(1, 4, 0, 40),
+	}, box)
+
+	create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Vertical,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, -5),
+	}, bottomFrame)
+
+	local weaponLabel = addLabel(bottomFrame, "Weapon_Label", 1)
+	local distanceLabel = addLabel(bottomFrame, "Distance_Label", 2)
+
+	entries[player] = {
+		Box = box,
+		HealthFill = healthFill,
+		HealthGradient = healthGradient,
+		NameLabel = nameLabel,
+		WeaponLabel = weaponLabel,
+		DistanceLabel = distanceLabel,
+		Character = nil,
+		Humanoid = nil,
+		RootPart = nil,
+		LastHealthRatio = nil,
+	}
+end
+
+local function removePlayer(player)
+	local entry = entries[player]
+	if entry then
+		entry.Box:Destroy()
+		entries[player] = nil
+	end
+end
+
+local corners = {
+	Vector3.new(-1, -1, -1),
+	Vector3.new(-1, -1, 1),
+	Vector3.new(-1, 1, -1),
+	Vector3.new(-1, 1, 1),
+	Vector3.new(1, -1, -1),
+	Vector3.new(1, -1, 1),
+	Vector3.new(1, 1, -1),
+	Vector3.new(1, 1, 1),
+}
+
+local function getScreenBounds(character, camera)
+	local boundingCFrame, boundingSize = character:GetBoundingBox()
+	local halfSize = boundingSize * 0.5
+	local minX, minY = math.huge, math.huge
+	local maxX, maxY = -math.huge, -math.huge
+
+	for _, corner in ipairs(corners) do
+		local offset = Vector3.new(
+			corner.X * halfSize.X,
+			corner.Y * halfSize.Y,
+			corner.Z * halfSize.Z
+		)
+		local projected = camera:WorldToViewportPoint(
+			boundingCFrame:PointToWorldSpace(offset)
+		)
+
+		if projected.Z <= 0.05 then
+			return nil
+		end
+
+		minX = math.min(minX, projected.X)
+		minY = math.min(minY, projected.Y)
+		maxX = math.max(maxX, projected.X)
+		maxY = math.max(maxY, projected.Y)
+	end
+
+	local viewport = camera.ViewportSize
+	if maxX < 0 or maxY < 0 or minX > viewport.X or minY > viewport.Y then
+		return nil
+	end
+
+	local width, height = maxX - minX, maxY - minY
+	if width < 1 or height < 1 then
+		return nil
+	end
+	return minX, minY, width, height
+end
+
+local function updatePlayer(player, entry, camera, origin)
+	if Settings.TeamCheck
+		and not player.Neutral
+		and not LocalPlayer.Neutral
+		and player.Team == LocalPlayer.Team then
+		entry.Box.Visible = false
+		return
+	end
+
+	local character = player.Character
+	if not character or not character.Parent then
+		entry.Box.Visible = false
+		return
+	end
+
+	if entry.Character ~= character then
+		entry.Character = character
+		entry.Humanoid = nil
+		entry.RootPart = nil
+		entry.LastHealthRatio = nil
+	end
+
+	local humanoid = entry.Humanoid
+	if not humanoid or humanoid.Parent ~= character then
+		humanoid = character:FindFirstChildOfClass("Humanoid")
+		entry.Humanoid = humanoid
+	end
+
+	local rootPart = entry.RootPart
+	if not rootPart or rootPart.Parent ~= character then
+		rootPart = character:FindFirstChild("HumanoidRootPart")
+		entry.RootPart = rootPart
+	end
+
+	if not humanoid or not rootPart or not rootPart:IsA("BasePart") or humanoid.Health <= 0 then
+		entry.Box.Visible = false
+		return
+	end
+
+	local distance = (rootPart.Position - origin).Magnitude * Settings.StudsToMeters
+	if Settings.MaxDistance > 0 and distance > Settings.MaxDistance then
+		entry.Box.Visible = false
+		return
+	end
+
+	local x, y, width, height = getScreenBounds(character, camera)
+	if not x then
+		entry.Box.Visible = false
+		return
+	end
+
+	entry.Box.Position = UDim2.fromOffset(x, y)
+	entry.Box.Size = UDim2.fromOffset(width, height)
+
+	local healthRatio = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
+	if entry.LastHealthRatio ~= healthRatio then
+		entry.LastHealthRatio = healthRatio
+		entry.HealthFill.Size = UDim2.fromScale(1, healthRatio)
+		entry.HealthGradient.Color = ColorSequence.new(
+			Settings.HealthLow,
+			Settings.HealthLow:Lerp(Settings.HealthHigh, healthRatio)
+		)
+	end
+
+	local tool = character:FindFirstChildOfClass("Tool")
+	local weaponText = tool and tool.Name or "Unarmed"
+	local distanceText = string.format("%dm", math.floor(distance + 0.5))
+	local nameText = string.format("%s(@%s)", player.DisplayName, player.Name)
+
+	if entry.WeaponLabel.Text ~= weaponText then
+		entry.WeaponLabel.Text = weaponText
+	end
+	if entry.DistanceLabel.Text ~= distanceText then
+		entry.DistanceLabel.Text = distanceText
+	end
+	if entry.NameLabel.Text ~= nameText then
+		entry.NameLabel.Text = nameText
+	end
+
+	entry.Box.Visible = true
+end
+
+local function cleanup()
+	if cleanedUp then
+		return
+	end
+	cleanedUp = true
+	for _, connection in ipairs(connections) do
+		connection:Disconnect()
+	end
+	table.clear(connections)
+	table.clear(entries)
+end
+
+table.insert(connections, screenGui.Destroying:Connect(cleanup))
+table.insert(connections, Players.PlayerAdded:Connect(addPlayer))
+table.insert(connections, Players.PlayerRemoving:Connect(removePlayer))
+
+for _, player in ipairs(Players:GetPlayers()) do
+	addPlayer(player)
+end
+
+table.insert(connections, UserInputService.InputBegan:Connect(function(input, processed)
+	if processed or UserInputService:GetFocusedTextBox() then
+		return
+	end
+	if input.KeyCode == Settings.ToggleKey then
+		Settings.Enabled = not Settings.Enabled
+	end
+end))
+
+table.insert(connections, RunService.RenderStepped:Connect(function()
+	local camera = workspace.CurrentCamera
+	local enabled = Settings.Enabled and camera ~= nil
+	screenGui.Enabled = enabled
+	if not enabled then
+		return
+	end
+
+	local localCharacter = LocalPlayer.Character
+	local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
+	local origin = camera.CFrame.Position
+	if localRoot and localRoot:IsA("BasePart") then
+		origin = localRoot.Position
+	end
+
+	for player, entry in pairs(entries) do
+		updatePlayer(player, entry, camera, origin)
+	end
+end))
+
+print("[G2L ESP] ProggyClean loaded. Right Alt toggles ESP.")
+
+return {
+	Gui = screenGui,
+	Settings = Settings,
+	Destroy = function()
+		screenGui:Destroy()
+	end,
+}
