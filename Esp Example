@@ -1,0 +1,33 @@
+local LIBRARY_URL = "https://raw.githubusercontent.com/14273l/Esp-Library/refs/heads/main/Esp"
+assert(type(loadstring) == "function", "This example requires loadstring support")
+local source = game:HttpGet(LIBRARY_URL)
+local chunk, compileError = loadstring(source, "EspLibrary")
+assert(chunk, compileError)
+
+-- Loading the library starts ESP and returns its controller.
+local ESP = chunk()
+assert(
+	type(ESP) == "table" and type(ESP.Settings) == "table" and type(ESP.Destroy) == "function",
+	"The ESP library did not return the expected controller"
+)
+
+local settings = ESP.Settings
+settings.Enabled = true
+settings.TeamCheck = false -- Set true to hide non-neutral teammates.
+settings.MaxDistance = 500 -- Meters; set to 0 for unlimited distance.
+settings.StudsToMeters = 0.28
+settings.ToggleKey = Enum.KeyCode.RightAlt
+
+-- Uncomment the controls you want to try:
+-- ESP.Settings.Enabled = false
+-- ESP.Settings.Enabled = true
+-- ESP.Settings.TeamCheck = true
+-- ESP.Settings.MaxDistance = 250
+-- ESP.Settings.MaxDistance = 0
+-- ESP.Settings.ToggleKey = Enum.KeyCode.F6
+-- ESP.Destroy() -- Removes the GUI and disconnects the library's listeners.
+
+-- BoxColor and TextColor are applied when player UI entries are created;
+-- changing those settings after loading does not recolor existing entries.
+
+return ESP
